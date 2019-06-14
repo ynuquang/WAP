@@ -1,0 +1,18 @@
+/home/quang/anaconda2/envs/theano/lib/python3.5/site-packages/theano/gpuarray/dnn.py:184: UserWarning: Your cuDNN version is more recent than Theano. If you encounter problems, try updating Theano or downgrading cuDNN to a version >= v5 and <= v7.
+  warnings.warn("Your cuDNN version is more recent than "
+Using cuDNN version 7600 on context None
+Preallocating 4506/4743 Mb (0.950000) on cuda
+Mapped name None to device cuda: Tesla K20c (0000:05:00.0)
+{'layersNum_block': [4, 4, 4, 4], 'dim_target': [111], 'bn_model': ['./models/bn_params.npz'], 'model': ['./models/attention_maxlen[200]_dimWord256_dim256.npz'], 'use-dropout': [True], 'input_channels': [1], 'optimizer': ['adam'], 'dim_dec': [256], 'dim_coverage': [128], 'dim_word': [256], 'reload': [False], 'maxlen': [200], 'decay-c': [0.0001], 'learning-rate': [0.0002], 'kernel_coverage': [5, 5], 'dim_ConvBlock': [32, 64, 64, 128], 'maxImagesize': [500000], 'clip-c': [100.0], 'kernel_Convenc': [3, 3], 'dim_attention': [128]}
+total words/phones 111
+Loading data
+Traceback (most recent call last):
+  File "./train_nmt.py", line 84, in <module>
+    'reload': [False]})
+  File "./train_nmt.py", line 45, in main
+    use_dropout=params['use-dropout'][0])
+  File "/home/quang/WAP/VGG/nmt.py", line 982, in train
+    batch_size=batch_size, batch_Imagesize=batch_Imagesize,maxlen=maxlen,maxImagesize=maxImagesize)
+  File "/home/quang/WAP/VGG/data_iterator.py", line 15, in dataIterator
+    features=pkl.load(fp.read())
+TypeError: file must have 'read' and 'readline' attributes

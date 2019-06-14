@@ -1,8 +1,8 @@
 import numpy
 
-import cPickle as pkl
+import pickle as pkl
 import gzip
-
+import sys
 
 def fopen(filename, mode='r'):
     if filename.endswith('.gz'):
@@ -11,8 +11,8 @@ def fopen(filename, mode='r'):
 
 def dataIterator(feature_file,label_file,dictionary,batch_size,batch_Imagesize,maxlen,maxImagesize):
     
-    fp=open(feature_file,'rb')
-    features=pkl.load(fp)
+    fp=open(feature_file,'r')
+    features=pkl.load(fp.read())
     fp.close()
 
     fp2=open(label_file,'r')
@@ -29,7 +29,7 @@ def dataIterator(feature_file,label_file,dictionary,batch_size,batch_Imagesize,m
             if dictionary.has_key(w):
                 w_list.append(dictionary[w])
             else:
-                print 'a word not in the dictionary !! sentence ',uid,'word ', w
+                print('a word not in the dictionary !! sentence ',uid,'word ', w)
                 sys.exit()
         targets[uid]=w_list
 
@@ -39,7 +39,7 @@ def dataIterator(feature_file,label_file,dictionary,batch_size,batch_Imagesize,m
     for uid,fea in features.iteritems():
         imageSize[uid]=fea.shape[1]*fea.shape[2]
 
-    imageSize= sorted(imageSize.iteritems(), key=lambda d:d[1]) # sorted by sentence length,  return a list with each triple element
+    imageSize= sorted(imageSize.items(), key=lambda d:d[1]) # sorted by sentence length,  return a list with each triple element
 
 
     feature_batch=[]
@@ -58,9 +58,9 @@ def dataIterator(feature_file,label_file,dictionary,batch_size,batch_Imagesize,m
         lab=targets[uid]
         batch_image_size=biggest_image_size*(i+1)
         if len(lab)>maxlen:
-            print 'sentence', uid, 'length bigger than', maxlen, 'ignore'
+            print('sentence', uid, 'length bigger than', maxlen, 'ignore')
         elif size>maxImagesize:
-            print 'image', uid, 'size bigger than', maxImagesize, 'ignore'
+            print('image', uid, 'size bigger than', maxImagesize, 'ignore')
         else:
             uidList.append(uid)
             if batch_image_size>batch_Imagesize or i==batch_size: # a batch is full
@@ -84,6 +84,6 @@ def dataIterator(feature_file,label_file,dictionary,batch_size,batch_Imagesize,m
     feature_total.append(feature_batch)
     label_total.append(label_batch)
 
-    print 'total ',len(feature_total), 'batch data loaded'
+    print('total ',len(feature_total), 'batch data loaded')
 
     return zip(feature_total,label_total),uidList
