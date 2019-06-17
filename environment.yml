@@ -1,0 +1,17 @@
+name: wap_py3
+dependencies:
+  - python=3.5
+  # scipyy
+  - numpy>=1.9.1,<=1.12
+  - scipy>=0.14,<0.17.1
+  - matplotlib 
+  - ipython 
+  - jupyter 
+  - pandas 
+  - sympy 
+  - nose
+  # theano
+  - libgpuarray
+  - theano=0.9.0
+  - pygpu=0.6
+  - cudnn=7.0

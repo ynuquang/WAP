@@ -137,7 +137,7 @@ def main(model, bn_model, dictionary_target, fea, latex, saveto, output, k=5):
     # load source dictionary and invert
     worddicts = load_dict(dictionary_target)
     worddicts_r = [None] * len(worddicts)
-    for kk, vv in worddicts.iteritems():
+    for kk, vv in worddicts.items():
         worddicts_r[vv] = kk
 
     valid, valid_uid_list = dataIterator(fea, latex, worddicts,
@@ -166,7 +166,7 @@ def main(model, bn_model, dictionary_target, fea, latex, saveto, output, k=5):
     print('Decoding ... ')
     for x, y in valid:
         for xx in x:
-            print ('%d : %s' % (valid_count_idx+1, valid_uid_list[valid_count_idx]))
+            print(('%d : %s' % (valid_count_idx+1, valid_uid_list[valid_count_idx])))
             xx_pad = numpy.zeros((xx.shape[0],xx.shape[1],xx.shape[2]), dtype='float32') # input_channels * height * width
             xx_pad[:,:, :] = xx / 255.
             stochastic = False
@@ -202,7 +202,7 @@ def main(model, bn_model, dictionary_target, fea, latex, saveto, output, k=5):
     m=re.search('ExpRate (.*)\n',stuff[1])
     valid_sacc=100. * float(m.group(1))
 
-    print ('Valid WER: %.2f%%, ExpRate: %.2f%%' % (valid_per,valid_sacc))
+    print(('Valid WER: %.2f%%, ExpRate: %.2f%%' % (valid_per,valid_sacc)))
 
 
 if __name__ == "__main__":

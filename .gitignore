@@ -99,3 +99,9 @@ ENV/
 
 # mypy
 .mypy_cache/
+
+
+# data
+data/off_image_test
+data/off_image_train
+*.pkl

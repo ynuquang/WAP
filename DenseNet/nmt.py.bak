@@ -1,27 +1,26 @@
 '''
-Build a WAP model with VGG
+Build a WAP model with DenseNet
 '''
 import theano
 import theano.tensor as tensor
 from theano.sandbox.rng_mrg import MRG_RandomStreams as RandomStreams
 from theano.tensor.signal import pool
-from theano.gpuarray.dnn import dnn_batch_normalization_train, dnn_batch_normalization_test
+from theano.gpuarray.dnn import dnn_batch_normalization_train
+from theano.gpuarray.dnn import dnn_batch_normalization_test
+
 import pickle as pkl
-#import ipdb
 import numpy
 import copy
 import pprint
-
 import os
 import warnings
 import sys
 import math
 import time
-
 from collections import OrderedDict
 
 from data_iterator import dataIterator
-from optimizers import adadelta, adam, adadelta_weightnoise, adam_weightnoise
+from optimizers import adam, adadelta
 
 profile = False
 
@@ -30,21 +29,21 @@ import re
 
 # push parameters to Theano shared variables
 def zipp(params, tparams):
-    for kk, vv in params.items():
+    for kk, vv in params.iteritems():
         tparams[kk].set_value(vv)
 
 
 # pull parameters from Theano shared variables
 def unzip(zipped):
     new_params = OrderedDict()
-    for kk, vv in zipped.items():
+    for kk, vv in zipped.iteritems():
         new_params[kk] = vv.get_value()
     return new_params
 
 
 # get the list of parameters: Note that tparams must be OrderedDict
 def itemlist(tparams):
-    return [vv for kk, vv in tparams.items()]
+    return [vv for kk, vv in tparams.iteritems()]
 
 
 # dropout
@@ -104,7 +103,7 @@ def _p(pp, name):
 # initialize Theano shared variables according to the initial parameters
 def init_tparams(params):
     tparams = OrderedDict()
-    for kk, pp in params.items():
+    for kk, pp in params.iteritems():
         tparams[kk] = theano.shared(params[kk], name=kk)
     return tparams
 
@@ -112,7 +111,7 @@ def init_tparams(params):
 # load parameters
 def load_params(path, params):
     pp = numpy.load(path)
-    for kk, vv in params.items():
+    for kk, vv in params.iteritems():
         if kk not in pp:
             warnings.warn('%s is not in the archive' % kk)
             continue
@@ -235,32 +234,90 @@ def prepare_data(options, images_x, seqs_y, n_words_src=30000,
     return x, x_mask, y, y_mask
 
 # conv layer
-def param_init_convlayer(rng, options, params, prefix='conv'):
-    num_channels = options['input_channels']
-    for block in range(0, len(options['dim_ConvBlock'])):
-        for level in range(options['layersNum_block'][block]):
-            name = 'b{}_l{}'.format(block, level)
-            params[_p(prefix, name)] = conv_norm_weight(rng, num_channels, options['dim_ConvBlock'][block], options['kernel_Convenc'])
-            bn_gamma  = numpy.asarray(rng.uniform(low=-1.0/math.sqrt(options['dim_ConvBlock'][block]),high=1.0/math.sqrt(options['dim_ConvBlock'][block]),size=options['dim_ConvBlock'][block]),dtype=numpy.float32)
-            params[_p(_p(prefix, name), 'bn_gamma')] = bn_gamma[None, :, None, None]
-            bn_beta = numpy.zeros((options['dim_ConvBlock'][block])).astype('float32')
-            params[_p(_p(prefix, name), 'bn_beta')] = bn_beta[None, :, None, None]
-            num_channels = options['dim_ConvBlock'][block]
+def param_init_DenseNet(rng, options, params, prefix='dense'):
+    name = 'input'
+    params[_p(prefix, name)] = conv_norm_weight(rng, options['input_channels'], options['channel_conv1'], options['kernel_conv1'])
+    bn_gamma  = numpy.asarray(rng.uniform(low=-1.0/math.sqrt(options['channel_conv1']),high=1.0/math.sqrt(options['channel_conv1']),size=options['channel_conv1']),dtype=numpy.float32)
+    params[_p(_p(prefix, name), 'bn_gamma')] = bn_gamma[None, :, None, None]
+    bn_beta = numpy.zeros((options['channel_conv1'])).astype('float32')
+    params[_p(_p(prefix, name), 'bn_beta')] = bn_beta[None, :, None, None]
+    k = options['GrowthRate']
+    dense_channels = options['channel_conv1']
+    for block in range(len(options['DenseBlock'])):        
+        for level in range(options['DenseBlock'][block]):
+            if options['Bottleneck']:
+                name = 'B_b{}_l{}'.format(block, level)
+                params[_p(prefix, name)] = conv_norm_weight(rng, dense_channels, 4*k, [1,1])
+                bn_gamma  = numpy.asarray(rng.uniform(low=-1.0/math.sqrt(4*k),high=1.0/math.sqrt(4*k),size=4*k),dtype=numpy.float32)
+                params[_p(_p(prefix, name), 'bn_gamma')] = bn_gamma[None, :, None, None]
+                bn_beta = numpy.zeros((4*k)).astype('float32')
+                params[_p(_p(prefix, name), 'bn_beta')] = bn_beta[None, :, None, None]
+                name = 'b{}_l{}'.format(block, level)
+                params[_p(prefix, name)] = conv_norm_weight(rng, 4*k, k, [3,3])
+                bn_gamma  = numpy.asarray(rng.uniform(low=-1.0/math.sqrt(k),high=1.0/math.sqrt(k),size=k),dtype=numpy.float32)
+                params[_p(_p(prefix, name), 'bn_gamma')] = bn_gamma[None, :, None, None]
+                bn_beta = numpy.zeros((k)).astype('float32')
+                params[_p(_p(prefix, name), 'bn_beta')] = bn_beta[None, :, None, None]
+            else:
+                name = 'b{}_l{}'.format(block, level)
+                params[_p(prefix, name)] = conv_norm_weight(rng, dense_channels, k, [3,3])
+                bn_gamma  = numpy.asarray(rng.uniform(low=-1.0/math.sqrt(k),high=1.0/math.sqrt(k),size=k),dtype=numpy.float32)
+                params[_p(_p(prefix, name), 'bn_gamma')] = bn_gamma[None, :, None, None]
+                bn_beta = numpy.zeros((k)).astype('float32')
+                params[_p(_p(prefix, name), 'bn_beta')] = bn_beta[None, :, None, None]
+            dense_channels += k
 
-    return params
+        if block < len(options['DenseBlock']) - 1:
+            compress_channels = int(dense_channels * options['Transition'])
+            name = 'C_b{}'.format(block)
+            params[_p(prefix, name)] = conv_norm_weight(rng, dense_channels, compress_channels, [1,1])
+            bn_gamma  = numpy.asarray(rng.uniform(low=-1.0/math.sqrt(compress_channels),high=1.0/math.sqrt(compress_channels),size=compress_channels),dtype=numpy.float32)
+            params[_p(_p(prefix, name), 'bn_gamma')] = bn_gamma[None, :, None, None]
+            bn_beta = numpy.zeros((compress_channels)).astype('float32')
+            params[_p(_p(prefix, name), 'bn_beta')] = bn_beta[None, :, None, None]
+            dense_channels = compress_channels
+
+    return params, dense_channels
 
 def init_bn_params(options):
     params = OrderedDict()
-    prefix='conv'
-    num_channels = options['input_channels']
-    for block in range(0, len(options['dim_ConvBlock'])):
-        for level in range(options['layersNum_block'][block]):
-            name = 'b{}_l{}'.format(block, level)
-            bn_mean = numpy.zeros((options['dim_ConvBlock'][block])).astype('float32')
+    prefix='dense'
+    name = 'input'
+    bn_mean = numpy.zeros((options['channel_conv1'])).astype('float32')
+    params[_p(_p(prefix, name), 'bn_mean')] = bn_mean[None, :, None, None]
+    bn_var = numpy.ones((options['channel_conv1'])).astype('float32')
+    params[_p(_p(prefix, name), 'bn_var')] = bn_var[None, :, None, None]
+    k = options['GrowthRate']
+    dense_channels = options['channel_conv1']
+    for block in range(len(options['DenseBlock'])):        
+        for level in range(options['DenseBlock'][block]):
+            if options['Bottleneck']:
+                name = 'B_b{}_l{}'.format(block, level)
+                bn_mean = numpy.zeros((4*k)).astype('float32')
+                params[_p(_p(prefix, name), 'bn_mean')] = bn_mean[None, :, None, None]
+                bn_var = numpy.ones((4*k)).astype('float32')
+                params[_p(_p(prefix, name), 'bn_var')] = bn_var[None, :, None, None]
+                name = 'b{}_l{}'.format(block, level)
+                bn_mean = numpy.zeros((k)).astype('float32')
+                params[_p(_p(prefix, name), 'bn_mean')] = bn_mean[None, :, None, None]
+                bn_var = numpy.ones((k)).astype('float32')
+                params[_p(_p(prefix, name), 'bn_var')] = bn_var[None, :, None, None]
+            else:
+                name = 'b{}_l{}'.format(block, level)
+                bn_mean = numpy.zeros((k)).astype('float32')
+                params[_p(_p(prefix, name), 'bn_mean')] = bn_mean[None, :, None, None]
+                bn_var = numpy.ones((k)).astype('float32')
+                params[_p(_p(prefix, name), 'bn_var')] = bn_var[None, :, None, None]
+            dense_channels += k
+        
+        if block < len(options['DenseBlock']) - 1:
+            compress_channels = int(dense_channels * options['Transition'])
+            name = 'C_b{}'.format(block)
+            bn_mean = numpy.zeros((compress_channels)).astype('float32')
             params[_p(_p(prefix, name), 'bn_mean')] = bn_mean[None, :, None, None]
-            bn_var = numpy.ones((options['dim_ConvBlock'][block])).astype('float32')
+            bn_var = numpy.ones((compress_channels)).astype('float32')
             params[_p(_p(prefix, name), 'bn_var')] = bn_var[None, :, None, None]
-            num_channels = options['dim_ConvBlock'][block]
+            dense_channels = compress_channels
 
     return params
 
@@ -286,7 +343,7 @@ def fflayer(tparams, state_below, options, prefix='rconv',
 
 # Conditional GRU layer with Attention
 def param_init_gru_cond(rng, options, params, prefix='gru_cond',
-                        nin=None, dim=None, dimctx=None, dimatt=None, 
+                        nin=None, dim=None, dimctx=None, dimatt=None,
                         nin_nonlin=None, dim_nonlin=None):
     if nin is None:
         nin = options['dim']
@@ -336,7 +393,7 @@ def param_init_gru_cond(rng, options, params, prefix='gru_cond',
     params[_p(prefix, 'W_comb_att')] = W_comb_att
 
     # attention: context trans weight
-    Wc_att = conv_norm_weight(rng, dimctx, dimatt, [1, 1]).astype('float32')
+    Wc_att = conv_norm_weight(rng, dimctx, dimatt, [1,1]).astype('float32')
     params[_p(prefix, 'Wc_att')] = Wc_att
 
     # attention: context trans bias
@@ -473,7 +530,6 @@ def gru_cond_layer(tparams, state_below, options, prefix='gru',
         return h2, ctx_, alpha.dimshuffle(2, 0, 1), alpha_past  # pstate_, preact, preactx, r, u
 
     seqs = [mask, state_below_, state_belowx]
-    #seqs = [mask, state_below_, state_belowx, state_belowc]
     _step = _step_slice
 
     shared_vars = [tparams[_p(prefix, 'U')],
@@ -520,18 +576,9 @@ def init_params(options):
     # embedding
     params['Wemb_dec'] = norm_weight(rng, options['dim_target'], options['dim_word'])
 
-    num_channels = options['input_channels']
-    for block in range(0, len(options['dim_ConvBlock'])):
-        for level in range(options['layersNum_block'][block]):
-            name = 'b{}_l{}'.format(block, level)
-            params[_p('conv', name)] = conv_norm_weight(rng, num_channels, options['dim_ConvBlock'][block], options['kernel_Convenc'])
-            bn_gamma = numpy.asarray(rng.uniform(low=-1.0/math.sqrt(options['dim_ConvBlock'][block]),high=1.0/math.sqrt(options['dim_ConvBlock'][block]),size=options['dim_ConvBlock'][block]),dtype=numpy.float32)
-            params[_p(_p('conv', name), 'bn_gamma')] = bn_gamma[None, :, None, None]
-            bn_beta = numpy.zeros((options['dim_ConvBlock'][block])).astype('float32')
-            params[_p(_p('conv', name), 'bn_beta')] = bn_beta[None, :, None, None]
-            num_channels = options['dim_ConvBlock'][block]
+    params, dense_channels = param_init_DenseNet(rng, options, params, prefix='dense')
 
-    ctxdim = options['dim_ConvBlock'][-1]
+    ctxdim = dense_channels
 
     # init_state, init_cell
     params = get_layer('ff')[0](rng, options, params, prefix='ff_state',
@@ -579,30 +626,90 @@ def build_model(tparams, bn_tparams, options):
     n_samples = x.shape[0]
 
     oup = x
-    for block in range(0,len(options['dim_ConvBlock'])):
-        for level in range(options['layersNum_block'][block]):
-            name = 'b{}_l{}'.format(block, level)
-            conv_filter = tparams[_p('conv', name)]
-            oup=theano.tensor.nnet.conv2d(oup, conv_filter, border_mode='half', subsample=(1,1))
-            bn_gamma = tparams[_p(_p('conv', name), 'bn_gamma')]
-            bn_beta = tparams[_p(_p('conv', name), 'bn_beta')]
-            bn_mean = bn_tparams[_p(_p('conv', name), 'bn_mean')]
-            bn_var = bn_tparams[_p(_p('conv', name), 'bn_var')]
-            oup, s_mean, s_invstd, opt_ret[_p(_p('conv', name), 'bn_mean')], opt_ret[_p(_p('conv', name), 'bn_var')] = dnn_batch_normalization_train(oup, bn_gamma, bn_beta, mode='spatial', epsilon=0.0001, running_mean=bn_mean, running_var=bn_var)
-            #oup, opt_ret[_p(_p('conv', name), 'bn_mean')], opt_ret[_p(_p('conv', name), 'bn_var')] = my_BatchNormalization_mask(oup, x_mask, use_noise, tparams[_p(_p('conv', name), 'bn_gamma')], tparams[_p(_p('conv', name), 'bn_beta')], bn_tparams, _p('conv', name))
-            oup=tensor.nnet.relu(oup)
+
+    name = 'input'
+    conv_filter = tparams[_p('dense', name)]
+    stride_conv1 = (options['stride_conv1'][0], options['stride_conv1'][1])
+    oup = theano.tensor.nnet.conv2d(oup, conv_filter, border_mode='half', subsample=stride_conv1)
+    if options['stride_conv1'][0] == 2:
+        x_mask = x_mask[:,0::2,0::2]
+    bn_gamma = tparams[_p(_p('dense', name), 'bn_gamma')]
+    bn_beta = tparams[_p(_p('dense', name), 'bn_beta')]
+    bn_mean = bn_tparams[_p(_p('dense', name), 'bn_mean')]
+    bn_var = bn_tparams[_p(_p('dense', name), 'bn_var')]
+    oup, s_mean, s_invstd, opt_ret[_p(_p('dense', name), 'bn_mean')], opt_ret[_p(_p('dense', name), 'bn_var')] =\
+     dnn_batch_normalization_train(oup, bn_gamma, bn_beta, mode='spatial', running_mean=bn_mean, running_var=bn_var)
+    oup = tensor.nnet.relu(oup)
+    oup = pool.pool_2d(oup,(2,2),ignore_border=False,stride=(2,2),pad=(0,0),mode='max')
+    dense_oup = oup
+    x_mask = x_mask[:,0::2,0::2]
+
+    for block in range(len(options['DenseBlock'])):        
+        for level in range(options['DenseBlock'][block]):
+            if options['Bottleneck']:
+                
+                name = 'B_b{}_l{}'.format(block, level)
+                conv_filter = tparams[_p('dense', name)]
+                oup = theano.tensor.nnet.conv2d(oup, conv_filter, border_mode='valid', subsample=(1,1))
+                bn_gamma = tparams[_p(_p('dense', name), 'bn_gamma')]
+                bn_beta = tparams[_p(_p('dense', name), 'bn_beta')]
+                bn_mean = bn_tparams[_p(_p('dense', name), 'bn_mean')]
+                bn_var = bn_tparams[_p(_p('dense', name), 'bn_var')]
+                oup, s_mean, s_invstd, opt_ret[_p(_p('dense', name), 'bn_mean')], opt_ret[_p(_p('dense', name), 'bn_var')] =\
+                 dnn_batch_normalization_train(oup, bn_gamma, bn_beta, mode='spatial', running_mean=bn_mean, running_var=bn_var)
+                oup = tensor.nnet.relu(oup)
+                if options['use_dropout']:
+                    oup = dropout_layer(oup, 0.2, use_noise,trng)
+                
+                name = 'b{}_l{}'.format(block, level)
+                conv_filter = tparams[_p('dense', name)]
+                oup = theano.tensor.nnet.conv2d(oup, conv_filter, border_mode='half', subsample=(1,1))
+                bn_gamma = tparams[_p(_p('dense', name), 'bn_gamma')]
+                bn_beta = tparams[_p(_p('dense', name), 'bn_beta')]
+                bn_mean = bn_tparams[_p(_p('dense', name), 'bn_mean')]
+                bn_var = bn_tparams[_p(_p('dense', name), 'bn_var')]
+                oup, s_mean, s_invstd, opt_ret[_p(_p('dense', name), 'bn_mean')], opt_ret[_p(_p('dense', name), 'bn_var')] =\
+                 dnn_batch_normalization_train(oup, bn_gamma, bn_beta, mode='spatial', running_mean=bn_mean, running_var=bn_var)
+                oup = tensor.nnet.relu(oup)
+                if options['use_dropout']:
+                    oup = dropout_layer(oup, 0.2, use_noise,trng)
+
+            else:
+                name = 'b{}_l{}'.format(block, level)
+                conv_filter = tparams[_p('dense', name)]
+                oup = theano.tensor.nnet.conv2d(oup, conv_filter, border_mode='half', subsample=(1,1))
+                bn_gamma = tparams[_p(_p('dense', name), 'bn_gamma')]
+                bn_beta = tparams[_p(_p('dense', name), 'bn_beta')]
+                bn_mean = bn_tparams[_p(_p('dense', name), 'bn_mean')]
+                bn_var = bn_tparams[_p(_p('dense', name), 'bn_var')]
+                oup, s_mean, s_invstd, opt_ret[_p(_p('dense', name), 'bn_mean')], opt_ret[_p(_p('dense', name), 'bn_var')] =\
+                 dnn_batch_normalization_train(oup, bn_gamma, bn_beta, mode='spatial', running_mean=bn_mean, running_var=bn_var)
+                oup = tensor.nnet.relu(oup)
+                if options['use_dropout']:
+                    oup = dropout_layer(oup, 0.2, use_noise,trng)
+            
+            dense_oup = concatenate([dense_oup, oup], axis=1)
+            oup = dense_oup
+
+        if block < len(options['DenseBlock']) - 1:
+            name = 'C_b{}'.format(block)
+            conv_filter = tparams[_p('dense', name)]
+            oup = theano.tensor.nnet.conv2d(oup, conv_filter, border_mode='valid', subsample=(1,1))
+            bn_gamma = tparams[_p(_p('dense', name), 'bn_gamma')]
+            bn_beta = tparams[_p(_p('dense', name), 'bn_beta')]
+            bn_mean = bn_tparams[_p(_p('dense', name), 'bn_mean')]
+            bn_var = bn_tparams[_p(_p('dense', name), 'bn_var')]
+            oup, s_mean, s_invstd, opt_ret[_p(_p('dense', name), 'bn_mean')], opt_ret[_p(_p('dense', name), 'bn_var')] =\
+             dnn_batch_normalization_train(oup, bn_gamma, bn_beta, mode='spatial', running_mean=bn_mean, running_var=bn_var)
+            oup = tensor.nnet.relu(oup)
             if options['use_dropout']:
-                if name in ['b3_l0', 'b3_l1', 'b3_l2']:
-                    oup=dropout_layer(oup, 0.2, use_noise,trng)
-        height_pad = tensor.alloc(-1., oup.shape[0], oup.shape[1], 1, oup.shape[3])
-        oup = concatenate([oup, height_pad], axis=2)
-        width_pad = tensor.alloc(-1., oup.shape[0], oup.shape[1], oup.shape[2], 1)
-        oup = concatenate([oup, width_pad], axis=3)
-        oup=pool.pool_2d(oup,(2,2),ignore_border=True,stride=(2,2),pad=(0,0),mode='max')
-        x_mask=x_mask[:,0::2,0::2]
+                oup = dropout_layer(oup, 0.2, use_noise,trng)
+            oup = pool.pool_2d(oup,(2,2),ignore_border=False,stride=(2,2),pad=(0,0),mode='average_exc_pad')
+            dense_oup = oup
+            x_mask = x_mask[:,0::2,0::2]
 
     # oup batch * featuremaps * height * width
-    ctx = oup
+    ctx = dense_oup
 
     # mean of the context (across time) will be used to initialize decoder rnn
     ctx_mean = (ctx * x_mask[:, None, :, :]).sum(axis=(2,3)) / x_mask.sum(axis=(1,2))[:, None]
@@ -681,36 +788,88 @@ def build_sampler(tparams, bn_tparams, options, trng, use_noise):
     n_samples = x.shape[0]
 
     oup = x # batch * input_channels * height * width
-    for block in range(0,len(options['dim_ConvBlock'])):
-        for level in range(options['layersNum_block'][block]):
-            name = 'b{}_l{}'.format(block, level)
-            conv_filter = tparams[_p('conv', name)]
-            oup=theano.tensor.nnet.conv2d(oup, conv_filter, border_mode='half', subsample=(1,1)) 
-            bn_gamma = tparams[_p(_p('conv', name), 'bn_gamma')]
-            bn_beta = tparams[_p(_p('conv', name), 'bn_beta')]
-            bn_mean = bn_tparams[_p(_p('conv', name), 'bn_mean')]
-            bn_var = bn_tparams[_p(_p('conv', name), 'bn_var')]
-            oup = dnn_batch_normalization_test(oup, bn_gamma, bn_beta, bn_mean, bn_var, mode='spatial', epsilon=0.0001)
-            #oup, opt_ret[_p(_p('conv', name), 'bn_mean')], opt_ret[_p(_p('conv', name), 'bn_var')] = my_BatchNormalization(oup, use_noise, tparams[_p(_p('conv', name), 'bn_gamma')], tparams[_p(_p('conv', name), 'bn_beta')], bn_tparams, _p('conv', name))
-            oup=tensor.nnet.relu(oup)
+
+    name = 'input'
+    conv_filter = tparams[_p('dense', name)]
+    stride_conv1 = (options['stride_conv1'][0], options['stride_conv1'][1])
+    oup = theano.tensor.nnet.conv2d(oup, conv_filter, border_mode='half', subsample=stride_conv1)
+    bn_gamma = tparams[_p(_p('dense', name), 'bn_gamma')]
+    bn_beta = tparams[_p(_p('dense', name), 'bn_beta')]
+    bn_mean = bn_tparams[_p(_p('dense', name), 'bn_mean')]
+    bn_var = bn_tparams[_p(_p('dense', name), 'bn_var')]
+    oup = dnn_batch_normalization_test(oup, bn_gamma, bn_beta, bn_mean, bn_var, mode='spatial')
+    oup = tensor.nnet.relu(oup)
+    oup = pool.pool_2d(oup,(2,2),ignore_border=False,stride=(2,2),pad=(0,0),mode='max')
+    dense_oup = oup
+
+    for block in range(len(options['DenseBlock'])):        
+        for level in range(options['DenseBlock'][block]):
+            if options['Bottleneck']:
+                
+                name = 'B_b{}_l{}'.format(block, level)
+                conv_filter = tparams[_p('dense', name)]
+                oup = theano.tensor.nnet.conv2d(oup, conv_filter, border_mode='valid', subsample=(1,1))
+                bn_gamma = tparams[_p(_p('dense', name), 'bn_gamma')]
+                bn_beta = tparams[_p(_p('dense', name), 'bn_beta')]
+                bn_mean = bn_tparams[_p(_p('dense', name), 'bn_mean')]
+                bn_var = bn_tparams[_p(_p('dense', name), 'bn_var')]
+                oup = dnn_batch_normalization_test(oup, bn_gamma, bn_beta, bn_mean, bn_var, mode='spatial')
+                oup = tensor.nnet.relu(oup)
+                if options['use_dropout']:
+                    oup = dropout_layer(oup, 0.2, use_noise,trng)
+                
+                name = 'b{}_l{}'.format(block, level)
+                conv_filter = tparams[_p('dense', name)]
+                oup = theano.tensor.nnet.conv2d(oup, conv_filter, border_mode='half', subsample=(1,1))
+                bn_gamma = tparams[_p(_p('dense', name), 'bn_gamma')]
+                bn_beta = tparams[_p(_p('dense', name), 'bn_beta')]
+                bn_mean = bn_tparams[_p(_p('dense', name), 'bn_mean')]
+                bn_var = bn_tparams[_p(_p('dense', name), 'bn_var')]
+                oup = dnn_batch_normalization_test(oup, bn_gamma, bn_beta, bn_mean, bn_var, mode='spatial')
+                oup = tensor.nnet.relu(oup)
+                if options['use_dropout']:
+                    oup = dropout_layer(oup, 0.2, use_noise,trng)
+
+            else:
+                name = 'b{}_l{}'.format(block, level)
+                conv_filter = tparams[_p('dense', name)]
+                oup = theano.tensor.nnet.conv2d(oup, conv_filter, border_mode='half', subsample=(1,1))
+                bn_gamma = tparams[_p(_p('dense', name), 'bn_gamma')]
+                bn_beta = tparams[_p(_p('dense', name), 'bn_beta')]
+                bn_mean = bn_tparams[_p(_p('dense', name), 'bn_mean')]
+                bn_var = bn_tparams[_p(_p('dense', name), 'bn_var')]
+                oup = dnn_batch_normalization_test(oup, bn_gamma, bn_beta, bn_mean, bn_var, mode='spatial')
+                oup = tensor.nnet.relu(oup)
+                if options['use_dropout']:
+                    oup = dropout_layer(oup, 0.2, use_noise,trng)
+            
+            dense_oup = concatenate([dense_oup, oup], axis=1)
+            oup = dense_oup
+
+        if block < len(options['DenseBlock']) - 1:
+            name = 'C_b{}'.format(block)
+            conv_filter = tparams[_p('dense', name)]
+            oup = theano.tensor.nnet.conv2d(oup, conv_filter, border_mode='valid', subsample=(1,1))
+            bn_gamma = tparams[_p(_p('dense', name), 'bn_gamma')]
+            bn_beta = tparams[_p(_p('dense', name), 'bn_beta')]
+            bn_mean = bn_tparams[_p(_p('dense', name), 'bn_mean')]
+            bn_var = bn_tparams[_p(_p('dense', name), 'bn_var')]
+            oup = dnn_batch_normalization_test(oup, bn_gamma, bn_beta, bn_mean, bn_var, mode='spatial')
+            oup = tensor.nnet.relu(oup)
             if options['use_dropout']:
-                if name in ['b3_l0', 'b3_l1', 'b3_l2']:
-                    oup=dropout_layer(oup, 0.2, use_noise,trng)
-        height_pad = tensor.alloc(-1., oup.shape[0], oup.shape[1], 1, oup.shape[3])
-        oup = concatenate([oup, height_pad], axis=2)
-        width_pad = tensor.alloc(-1., oup.shape[0], oup.shape[1], oup.shape[2], 1)
-        oup = concatenate([oup, width_pad], axis=3)
-        oup=pool.pool_2d(oup,(2,2),ignore_border=True,stride=(2,2),pad=(0,0),mode='max')
+                oup = dropout_layer(oup, 0.2, use_noise,trng)
+            oup = pool.pool_2d(oup,(2,2),ignore_border=False,stride=(2,2),pad=(0,0),mode='average_exc_pad')
+            dense_oup = oup
 
-
-    ctx = oup # batch * featuremaps * height * width
+    # oup batch * featuremaps * height * width
+    ctx = dense_oup
     # get the input for decoder rnn initializer mlp
     ctx_mean = ctx.mean(axis=(2,3))
     # ctx_mean = concatenate([proj[0][-1],projr[0][-1]], axis=proj[0].ndim-2)
     init_state = get_layer('ff')[1](tparams, ctx_mean, options,
                                     prefix='ff_state', activ='tanh')
 
-    print(('Building f_init...'), end=' ')
+    print('Building f_init...',)
     outs = [init_state, ctx]
     f_init = theano.function([x], outs, name='f_init', profile=profile,allow_input_downcast=True)
     print('Done')
@@ -766,7 +925,7 @@ def build_sampler(tparams, bn_tparams, options, trng, use_noise):
 
     # compile a function to do the whole thing above, next word probability,
     # sampled word for the next target, next hidden state to be used
-    print(('Building f_next...',))
+    print('Building f_next...',)
     inps = [y, ctx, init_state, alpha_past]
     outs = [next_probs, next_sample, next_state, next_alpha_past]
     f_next = theano.function(inps, outs, name='f_next', profile=profile,allow_input_downcast=True)
@@ -898,7 +1057,7 @@ def pred_probs(f_log_probs, prepare_data, options, iterator, verbose=False):
             print('probs nan')
 
         if verbose:
-            print('%d samples computed' % (n_done), file=sys.stderr)
+            print >>sys.stderr, '%d samples computed' % (n_done)
 
     return numpy.array(probs)
 
@@ -912,104 +1071,24 @@ def load_dict(dictFile):
         w=l.strip().split()
         lexicon[w[0]]=int(w[1])
 
-    print(('total words/phones',len(lexicon)))
+    print ('total words/phones',len(lexicon))
     return lexicon
 
-def apply_adative_noise(tparams,options,trng,grads,num_examples):
-    log_sigma_scale = 2048.0
-    init_sigma = 1.0e-12
-    model_cost_coefficient=options['model_cost_coeff']
-    p_noisy=[]
-    Beta=[]
-    tparams_p_u=OrderedDict()
-    tparams_p_ls2=OrderedDict()
-    #tparams_p_s2=OrderedDict()
-    for k,p in tparams.items():
-        p_u = theano.shared(p.get_value(),name='%s_miu' % k)  # miu
-        p_ls2 = theano.shared((numpy.zeros_like(p.get_value()) +
-                               numpy.log(init_sigma) * 2. / log_sigma_scale
-                               ).astype(dtype=numpy.float32) ,name='%s_sigma' % k) # log_(sigma^2)
-        p_s2 = tensor.exp(p_ls2 * log_sigma_scale) # sigma^2
-
-        Beta.append((p_u,p_ls2,p_s2))
-        tparams_p_u[k]=p_u
-        tparams_p_ls2[k]=p_ls2
-        #tparams_p_s2[k]=p_s2
-        #p_noisy_tmp = p_u + trng.normal(size=p.get_value().shape) * tensor.sqrt(p_s2)
-        #p_noisy.append(p_noisy_tmp)
-    
-
-
-    #  compute the prior mean and variation
-    temp_sum = 0.0
-    temp_param_count = 0.0
-    for p_u, unused_p_ls2, unused_p_s2 in Beta:
-        temp_sum = temp_sum + p_u.sum()
-        temp_param_count = temp_param_count + p_u.shape.prod()
-
-    prior_u = tensor.cast(temp_sum / temp_param_count, 'float32')
-
-    temp_sum = 0.0
-    for p_u, unused_ls2, p_s2 in Beta:
-        temp_sum = temp_sum + (p_s2).sum() + (((p_u-prior_u)**2).sum())
-
-    prior_s2 = tensor.cast(temp_sum/temp_param_count, 'float32')
-    
-
-    # update miu and sigma gradient with w's grads ## grads is a list
-    new_grads_miu = []
-    new_grads_sigma = []
-
-    # Warning!!! ????? maybe error????
-    # This only works for batch size 1 (we want that the sum of squares
-    # be the square of the sum!
-    #
-    #diag_hessian_estimate = [g**2 for g in grads]
-
-    for (p_u, p_ls2, p_s2),p_grad in zip(Beta,grads):
-        p_u_grad = (model_cost_coefficient * (p_u - prior_u) /
-                    (num_examples*prior_s2) + p_grad)
-
-        p_ls2_grad = (numpy.float32(model_cost_coefficient *
-                                    0.5 / num_examples * log_sigma_scale) *
-                      (p_s2/prior_s2 - 1.0) +
-                      (0.5*log_sigma_scale) * p_s2 * (p_grad**2)
-                      )
-        new_grads_miu.append(p_u_grad)
-        new_grads_sigma.append(p_ls2_grad)
-
-
-
-    # return
-
-    # add noise to weight
-    p_add_noise=[]
-    for p,p_ls2 in zip(itemlist(tparams),itemlist(tparams_p_ls2)):
-        p_add_noise.append((p,p+trng.normal(size=p.get_value().shape) * tensor.sqrt(tensor.exp(p_ls2 * log_sigma_scale))))
-    f_apply_noise_to_weight = theano.function([], [], updates=p_add_noise, profile=profile)
-
-
-
-    # restore weight
-    copy_weight=[]
-    for p,p_u in zip(itemlist(tparams),itemlist(tparams_p_u)):
-        copy_weight.append((p,p_u))
-    f_copy_weight = theano.function([],[],updates=copy_weight, profile=profile)
-
-
-
-    return f_apply_noise_to_weight,f_copy_weight,new_grads_miu,new_grads_sigma,tparams_p_u,tparams_p_ls2 #,tparams_p_s2
 
 
 
 def train(dim_word=100,  # word vector dimensionality
-          dim_dec=1000,
+          kernel_conv1=[7,7],
+          stride_conv1=[2,2],
+          channel_conv1=16,
+          GrowthRate=12,
+          DenseBlock=[6,6,6],
+          Bottleneck=True,
+          Transition=1,
+          dim_dec=1000,  # the number of gru units
           dim_attention=512,
           dim_coverage=512,
           kernel_coverage=[5,5],
-          kernel_Convenc=[3,1],
-          dim_ConvBlock=[32,64,64,128],
-          layersNum_block=[4,4,4,4],
           encoder='gru',
           decoder='gru_cond',
           patience=4,  # early stopping patience
@@ -1020,7 +1099,6 @@ def train(dim_word=100,  # word vector dimensionality
           alpha_c=0.,  # alignment regularization
           clip_c=-1.,  # gradient clipping threshold
           lrate=1e-8,  # learning rate
-          model_cost_coeff=0.1, # model cost coefficient for adaptive noise
           dim_target=62,  # source vocabulary size
           input_channels=123,  # target vocabulary size
           maxlen=100,  # maximum length of the description
@@ -1052,7 +1130,7 @@ def train(dim_word=100,  # word vector dimensionality
 
     worddicts = load_dict(dictionaries[0])
     worddicts_r = [None] * len(worddicts)
-    for kk, vv in worddicts.items():
+    for kk, vv in worddicts.iteritems():
         worddicts_r[vv] = kk
 
     # reload options
@@ -1091,17 +1169,17 @@ def train(dim_word=100,  # word vector dimensionality
     f_init, f_next = build_sampler(tparams, bn_tparams, model_options, trng, use_noise)
 
     # before any regularizer
-    print(('Building f_log_probs...',))
+    print('Building f_log_probs...',)
     f_log_probs = theano.function(inps, cost, profile=profile)
     print('Done')
 
     cost = cost.mean()
 
-    # apply L2 regularization on weights
+    # apply L2 regularization on DenseNet weights
     if decay_c > 0.:
         decay_c = theano.shared(numpy.float32(decay_c), name='decay_c')
         weight_decay = 0.
-        for kk, vv in tparams.items():
+        for kk, vv in tparams.iteritems():
             tmp = kk.split('_')
             if tmp[-2] != 'bn':
                 weight_decay += (vv ** 2).sum()
@@ -1117,11 +1195,11 @@ def train(dim_word=100,  # word vector dimensionality
         cost += alpha_reg
 
     # after all regularizers - compile the computational graph for cost
-    print(('Building f_cost...',))
+    print('Building f_cost...',)
     f_cost = theano.function(inps, cost, profile=profile)
     print('Done')
 
-    print(('Computing gradient...',))
+    print('Computing gradient...',)
     grads = tensor.grad(cost, wrt=itemlist(tparams))
     print('Done')
 
@@ -1137,22 +1215,17 @@ def train(dim_word=100,  # word vector dimensionality
                                            g))
         grads = new_grads
 
-    # apply_adaptive_noise and update gradient for adadelta
-    f_apply_noise_to_weight,f_copy_weight,new_grads_miu,new_grads_sigma, \
-                tparams_p_u,tparams_p_ls2=apply_adative_noise(tparams,model_options,trng,grads,2*8835)
-
     # compile the optimizer, the actual computational graph is compiled here
-    print('Building optimizer for miu and sigma')
     lr = tensor.scalar(name='lr')
-    print(('Building optimizers...',))
-    f_grad_shared, f_update_miu, f_update_sigma = eval(optimizer)(lr, tparams_p_u, tparams_p_ls2, bn_tparams, opt_ret, new_grads_miu, new_grads_sigma, inps, cost)
+    print('Building optimizers...',)
+    f_grad_shared, f_update = eval(optimizer)(lr, tparams, bn_tparams, opt_ret, grads, inps, cost)
     print('Done')
 
     
     
     # print(model parameters)
-    print(("Model params:\n{0}".format(
-            pprint.pformat(sorted([p for p in params])))))
+    print ("Model params:\n{0}".format(
+            pprint.pformat(sorted([p for p in params]))))
     # end
 
 
@@ -1197,18 +1270,15 @@ def train(dim_word=100,  # word vector dimensionality
             x, x_mask, y, y_mask = prepare_data(model_options, x, y)
 
             if x is None:
-                print(('Minibatch with zero sample under length ', maxlen))
+                print('Minibatch with zero sample under length ', maxlen)
                 uidx -= 1
                 continue
 
-            f_apply_noise_to_weight() # add noise to tparams
             # compute cost, grads and copy grads to shared variables
             cost = f_grad_shared(x, x_mask, y, y_mask)
             cost_s += cost
             # do the update on parameters
-            f_update_miu(lrate) # update p_u
-            f_update_sigma(lrate) # update p_sigma
-            f_copy_weight() # copy weight from tparams_p_u to tparams
+            f_update(lrate)
 
             ud = time.time() - ud_start
             ud_s += ud
@@ -1224,13 +1294,13 @@ def train(dim_word=100,  # word vector dimensionality
             if numpy.mod(uidx, dispFreq) == 0:
                 ud_s /= 60.
                 cost_s /= dispFreq
-                print(('Epoch ', eidx, 'Update ', uidx, 'Cost ', cost_s, 'UD ', ud_s, 'lrate ',lrate, 'bad_counter', bad_counter))
+                print('Epoch ', eidx, 'Update ', uidx, 'Cost ', cost_s, 'UD ', ud_s, 'lrate ',lrate, 'bad_counter', bad_counter)
                 ud_s = 0
                 cost_s = 0.
 
             # save the best model so far
             if numpy.mod(uidx, saveFreq) == 0:
-                print(('Saving...',))
+                print('Saving...',)
 
                 if best_p is not None:
                     params = best_p
@@ -1279,7 +1349,7 @@ def train(dim_word=100,  # word vector dimensionality
                 print('valid set decode done')
                 ud_epoch = time.time() - ud_epoch
                 ud_epoch /= 60.
-                print(('epoch cost time ... ', ud_epoch))
+                print('epoch cost time ... ', ud_epoch)
 
 
 
@@ -1313,14 +1383,14 @@ def train(dim_word=100,  # word vector dimensionality
                 if uidx/validFreq != 0 and valid_err > numpy.array(history_errs).min():
                     bad_counter += 1
                     if bad_counter > patience:
-                        if halfLrFlag==5:
+                        if halfLrFlag==2:
                             print('Early Stop!')
                             estop = True
                             break
                         else:
                             print('Lr decay and retrain!')
                             bad_counter = 0
-                            lrate = lrate / 2
+                            lrate = lrate / 10
                             params = best_p
                             bn_params = best_bn_p
                             halfLrFlag += 1 
@@ -1329,15 +1399,15 @@ def train(dim_word=100,  # word vector dimensionality
                     #ipdb.set_trace()
                     print('valid_err nan')
 
-                print(('Valid WER: %.2f%%, ExpRate: %.2f%%, Cost: %f' % (valid_per,valid_sacc,valid_err_cost)))
+                print ('Valid WER: %.2f%%, ExpRate: %.2f%%, Cost: %f' % (valid_per,valid_sacc,valid_err_cost))
 
             # finish after this many updates
             if uidx >= finish_after:
-                print(('Finishing after %d iterations!' % uidx))
+                print('Finishing after %d iterations!' % uidx)
                 estop = True
                 break
 
-        print(('Seen %d samples' % n_samples))
+        print('Seen %d samples' % n_samples)
 
         if estop:
             break
@@ -1350,7 +1420,7 @@ def train(dim_word=100,  # word vector dimensionality
     valid_err = pred_probs(f_log_probs, prepare_data,
                            model_options, valid).mean()
 
-    print(('Valid ', valid_err))
+    print('Valid ', valid_err)
 
     params = copy.copy(best_p)
     bn_params = copy.copy(best_bn_p)
