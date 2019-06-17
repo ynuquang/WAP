@@ -83,6 +83,7 @@ def gen_sample(f_init, f_next, x, options, trng=None, k=1, maxlen=30,
             new_hyp_states = []
             new_hyp_alpha_past = []
             for idx, [ti, wi] in enumerate(zip(trans_indices, word_indices)):
+                ti, wi = ti.astype(int), wi.astype(int)
                 new_hyp_samples.append(hyp_samples[ti]+[wi])
                 new_hyp_scores[idx] = copy.copy(costs[idx])
                 new_hyp_states.append(copy.copy(next_state[ti]))

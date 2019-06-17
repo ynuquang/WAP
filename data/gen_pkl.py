@@ -9,6 +9,11 @@ from scipy.misc import imread, imresize, imsave
 image_paths = ["./off_image_train/", "./off_image_test/"]
 outFiles = ["offline-train.pkl", "offline-test.pkl"]
 scpFilePaths = ["train_caption.txt", "test_caption.txt"]
+
+cases_to_avoid = ['31_em_196', '501_em_15', 'RIT_2014_210', '504_em_38', '514_em_348', 'RIT_2014_185'] # too big for our GPU welp
+# min(w*h) of cases to avoid
+max_pix = 120925
+
 for image_path, outFile, scpFilePath in zip(image_paths, outFiles, scpFilePaths):
     oupFp_feature = open(outFile, "wb")
     features = {}
@@ -24,6 +29,10 @@ for image_path, outFile, scpFilePath in zip(image_paths, outFiles, scpFilePaths)
             image_file = image_path + key + "_" + str(0) + ".bmp"
             im = imread(image_file)
             mat = numpy.zeros([channels, im.shape[0], im.shape[1]], dtype="uint8")
+
+            if (im.shape[0] * im.shape[1] >= max_pix): # too big for our GPU welp
+                continue
+
             for channel in range(channels):
                 image_file = image_path + key + "_" + str(channel) + ".bmp"
                 im = imread(image_file)

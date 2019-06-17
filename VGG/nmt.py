@@ -143,7 +143,10 @@ def norm_weight(rng, nin, nout):
     fan_in = nin
     fan_out = nout
     W_bound = numpy.sqrt(6. / (fan_in + fan_out))
-    W = numpy.asarray(rng.uniform(low=-W_bound, high=W_bound, size=(nin, nout)), dtype=numpy.float32)
+    W = numpy.asarray(
+        rng.uniform(low=-round(W_bound), high=round(W_bound), size=(round(nin), round(nout))), 
+        dtype=numpy.float32
+    )
     return W.astype('float32')
 
 def conv_norm_weight(rng, nin, nout, kernel_size):
@@ -710,7 +713,7 @@ def build_sampler(tparams, bn_tparams, options, trng, use_noise):
     init_state = get_layer('ff')[1](tparams, ctx_mean, options,
                                     prefix='ff_state', activ='tanh')
 
-    print(('Building f_init...'), end=' ')
+    print(('Building f_init...'))
     outs = [init_state, ctx]
     f_init = theano.function([x], outs, name='f_init', profile=profile,allow_input_downcast=True)
     print('Done')
@@ -898,7 +901,7 @@ def pred_probs(f_log_probs, prepare_data, options, iterator, verbose=False):
             print('probs nan')
 
         if verbose:
-            print('%d samples computed' % (n_done), file=sys.stderr)
+            print(f'{n_done} samples computed', file=sys.stderr)
 
     return numpy.array(probs)
 

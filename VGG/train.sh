@@ -7,5 +7,5 @@
 #export CPATH=$CPATH:/usr/local/cudnn/include
 
 export THEANO_FLAGS=device=cuda,floatX=float32,optimizer_including=cudnn,gpuarray.preallocate=0.95
-nohup python -u ./train_nmt.py ./models/ 1>log.txt 2>&1 &
+nohup python3 -u ./train_nmt.py ./models/ 1>log.txt 2>&1 &
 tail -f log.txt

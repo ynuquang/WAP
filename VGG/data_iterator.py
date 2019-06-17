@@ -12,7 +12,7 @@ def fopen(filename, mode='r'):
 def dataIterator(feature_file,label_file,dictionary,batch_size,batch_Imagesize,maxlen,maxImagesize):
     
     fp=open(feature_file,'rb')
-    features=pkl.load(fp)
+    features=pkl.load(fp,encoding='latin1')
     fp.close()
 
     fp2=open(label_file,'r')
